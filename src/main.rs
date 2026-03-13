@@ -182,19 +182,29 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
     let mut interval = interval(Duration::from_millis(100));
     let mut sse_output = SseData::new();
     let mut now = Instant::now() - Duration::from_secs(60);
+    let mut now2 = Instant::now() - Duration::from_hours(3);
+    let mut now3 = Instant::now() - Duration::from_mins(60);
     let mut ip = String::new();
     let mut old_ip = "";
     loop {
         let stocks = state.lock().await.stocks.clone();
-        let oil = state.lock().await.oil.clone();
         if now.elapsed() >= Duration::from_secs(60) {
-            tokio::spawn(updater(stocks));
-            oil.lock().await.update().await.unwrap();
             get_wx(state.clone()).await;
             now = Instant::now();
             ip = update_ip(old_ip).await;
             old_ip = ip.as_str();
             println!("Attempted getting Wx");
+        }
+        if now2.elapsed() >= Duration::from_hours(3) {
+            let oil = state.lock().await.oil.clone();
+            oil.lock().await.update().await.unwrap();
+            now2 = Instant::now();
+            println!("Attmpted to update oil price!");
+        }
+        if now3.elapsed() >= Duration::from_mins(60) {
+            tokio::spawn(updater(stocks));
+            now3 = Instant::now();
+            println!("Attempted to update stocks");
         }
         let mut val = state.lock().await.clone();
         val.ip = ip.clone();
