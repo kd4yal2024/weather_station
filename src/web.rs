@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::Message;
 use futures_util::stream::SplitSink;
-use crate::{oil::{OilDisplay, OilPrice}, stocks::Stock};
+use crate::{oil::{OilDisplay, OilPrice, Comodities}, stocks::Stock};
 
 
 #[derive(Template)]
@@ -42,7 +42,8 @@ pub struct SseData {
     pub now: String,
     pub metar: HashMap<String, Vec<String>>,
     pub stocks: Vec<Stock>,
-    pub oil: OilDisplay,
+    pub oil1: OilDisplay,
+    pub oil2: OilDisplay,
     pub status: String,
 }
 impl SseData {
@@ -58,7 +59,8 @@ impl SseData {
                 output
             },
             stocks: Vec::new(),
-            oil: OilDisplay { price: 0.0, change_ammount: 0.0, change_percent: 0.0, updated_at: String::from("NO DATA") },
+            oil1: OilDisplay::new(),
+            oil2: OilDisplay::new(),
             status: "Hello World!".to_string(),
         }
     }
@@ -83,14 +85,18 @@ pub struct AppState {
     pub sender_ws: Sender<(String,String)>,
     pub clients: Arc<Mutex<HashMap<String, SplitSink<WebSocket, Message>>>>,
     pub stocks: Arc<Mutex<Vec<Stock>>>,
-    pub oil: Arc<Mutex<OilPrice>>,
+    pub oil: Arc<Mutex<Vec<OilPrice>>>,
     pub status: String,
 }
 impl AppState {
     pub fn new() -> Arc<Mutex<Self>> {
         let (tx, _rx) = broadcast::channel(8);
         let (sender, _) = broadcast::channel(8);
-
+        let oil_arr = [Comodities::WTI_USD, Comodities::BRENT_CRUDE_USD];
+        let mut oil_output = Vec::<OilPrice>::new();
+        oil_arr.iter().for_each(|x| {
+            oil_output.push(OilPrice::new(x.clone()));
+        });
         Arc::new(Mutex::new(Self {
             sender: tx,
             display: HashMap::new(),
@@ -104,7 +110,7 @@ impl AppState {
             sender_ws: sender,
             clients: Arc::new(Mutex::new(HashMap::new())),
             stocks: Arc::new(Mutex::new(Vec::new())),
-            oil: Arc::new(Mutex::new(OilPrice::new())),
+            oil: Arc::new(Mutex::new(oil_output)),
             status: String::new(),
         }))
     }

@@ -145,8 +145,8 @@ setTimeout(() =>{
       main_data = JSON.parse(event.data)
       let metar_data = main_data.metar;
       let stocks = main_data.stocks;
-      let oil = main_data.oil;
-      console.log(`OIL:${oil.price}`);
+      let oil1 = main_data.oil1;
+      let oil2 = main_data.oil2;
       main_data = main_data.wx
       if (metarWindow){
         metarWindow.postMessage(metar_data, window.location.origin)
@@ -154,13 +154,15 @@ setTimeout(() =>{
       if (tafWindow) {
         tafWindow.postMessage(metar_data, window.location.origin)
       }
-      console.log(stocks);
       while (stockRow.childNodes.length > 2) {
         stockRow.removeChild(stockRow.lastChild);
       }
-      let oil_price = {"symbol": "Oil", "price": oil.price, "change": oil.change_ammount,
-       "perc_chng": oil.change_percent, "time": oil.updated_at, "display": null};
-      stocks.unshift(oil_price);
+      let wti_price = {"symbol": "WTI", "price": oil1.price, "change": oil1.change_ammount,
+       "perc_chng": oil1.change_percent, "time": oil1.updated_at, "display": null};
+      let brent_price = {"symbol": "BRENT", "price": oil2.price, "change": oil2.change_ammount,
+       "perc_chng": oil2.change_percent, "time": oil2.updated_at, "display": null};
+      stocks.unshift(brent_price)
+      stocks.unshift(wti_price);
       stocks.forEach(stock => {
         let arrow;
         let field = document.createElement("div");

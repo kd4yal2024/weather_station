@@ -21,7 +21,7 @@ use std::time::Instant;
 use std::{convert::Infallible, time::Duration};
 use tokio::sync::Mutex;
 use tokio::time::interval;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::services::ServeDir;
 use chrono::{self, DateTime, Local};
 pub mod web;
 pub mod stocks;
@@ -58,7 +58,6 @@ async fn main() -> Result<()> {
         .route("/ws", get(ws_handler))
         .route("/ws_local", get(ws_loacl_handler))
         .route("/test", get(test_get))
-        .layer(TraceLayer::new_for_http())
         .with_state(app_state);
     let _ = axum::serve(listener, app).await;
     Ok(())
@@ -139,7 +138,14 @@ async fn handle_ws(state: Arc<Mutex<AppState>>, socket: WebSocket, loop_back: bo
                     now: Local::now().format("%A, %B %-d, %Y at %-H:%M:%S").to_string(),
                     data: content.to_string(),
                 }).unwrap_or("INVALID DATA".to_string());
-                tx.send((id.to_string(), output)).unwrap();
+                match tx.send((id.to_string(), output)) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        println!("ERROR WHILE SENDING: {}", e);
+                        break;
+                    }
+                }
+                
             },
             WsMessage::Ping(content) => println!("Ping: {:?}", content),
             WsMessage::Close(_content) => println!("Connection Closed"),
@@ -182,12 +188,13 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
     let mut interval = interval(Duration::from_millis(100));
     let mut sse_output = SseData::new();
     let mut now = Instant::now() - Duration::from_secs(60);
-    let mut now2 = Instant::now() - Duration::from_hours(3);
-    let mut now3 = Instant::now() - Duration::from_mins(60);
+    let mut now2 = Instant::now() - Duration::from_hours(1);
+    let mut now3 = Instant::now() - Duration::from_mins(5);
     let mut ip = String::new();
     let mut old_ip = "";
     loop {
         let stocks = state.lock().await.stocks.clone();
+        let oil = state.lock().await.oil.clone();
         if now.elapsed() >= Duration::from_secs(60) {
             get_wx(state.clone()).await;
             now = Instant::now();
@@ -195,14 +202,16 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
             old_ip = ip.as_str();
             println!("Attempted getting Wx");
         }
-        if now2.elapsed() >= Duration::from_hours(3) {
-            let oil = state.lock().await.oil.clone();
-            oil.lock().await.update().await.unwrap();
+        if now2.elapsed() >= Duration::from_hours(1) {
+            let mut oil_lck = oil.lock().await;
+            for x in oil_lck.iter_mut() {
+                x.update().await.unwrap();
+            }
             now2 = Instant::now();
             println!("Attmpted to update oil price!");
         }
-        if now3.elapsed() >= Duration::from_mins(60) {
-            tokio::spawn(updater(stocks));
+        if now3.elapsed() >= Duration::from_mins(5) {
+            updater(stocks).await;
             now3 = Instant::now();
             println!("Attempted to update stocks");
         }
@@ -224,7 +233,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         sse_output.users = val.users.clone();
         sse_output.display = val.display.clone();
         sse_output.stocks = val.stocks.lock().await.clone();
-        sse_output.oil = val.oil.lock().await.display();
+        sse_output.oil1 = oil.lock().await[0].display();
+        sse_output.oil2 = oil.lock().await[1].display();
         sse_output.status = val.status.clone();
         let _ = val.sender.send(serde_json::to_string(&sse_output).unwrap_or("JSON ERROR".to_string()));
         interval.tick().await;
@@ -504,7 +514,7 @@ async fn update_ip(old_ip: &str) -> String {
                 .subject("New IP Address")
                 .body(format!("{}\n", output.clone()))
                 .unwrap();
-            let mailer = SmtpTransport::builder_dangerous("192.168.0.11")
+            let mailer = SmtpTransport::builder_dangerous("127.0.0.1")
                 .port(25)
                 .build();
             match mailer.send(&email) {
