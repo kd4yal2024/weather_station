@@ -226,7 +226,8 @@ function uuid() {
 
 
 /* Demo: Run it */
-const sock_ip = "ws://127.0.0.1:8080/ws_local"
+const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+const sock_ip = `${socketProtocol}//${window.location.host}/ws_local`
 const statusBar = document.getElementById("status")
 const roundDialEl= document.getElementById("dial_1");
 const slaveDialEl = document.getElementById("dial_2");

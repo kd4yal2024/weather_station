@@ -1,79 +1,326 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <!--Comment-->
-        <title>TAF</title>
-        <style>
-            .button {
-                background-color: rgb(37, 218, 85);
-                color: black;
-                border:blue
-                
-            }
-            table, th, td {
-                border-color: blue;
-                border: 1px solid magenta;
-            
-            }
-            
-        </style>
-    </head>
-    <body>
-        <table id="display" class="table">
-        </table>
-    </body>
-    <script>
-        let oldData;
-        display = document.getElementById("display") //main table
-        const allowedOrigin = window.location.origin;
-        window.addEventListener("message", event => {
-            if (JSON.stringify(event.data) != oldData) {
-                if (event.origin === allowedOrigin) {
-                    while (display.firstChild){
-                            display.removeChild(display.lastChild)
-                        }
-                    let rowCount = 0;
-                    for (let[key, val] of Object.entries(event.data)){
-                        console.log(val)
-                        let newElRow = document.createElement("tr")
-                        let newElTd = [];
-                        for (let i=0; i<2; i++) {
-                            let newElData = document.createElement("td")
-                            newElData.setAttribute("class", "table_data")
-                            newElTd.push(newElData)
-                            newElRow.appendChild(newElData)
-                        }
-                        let output;
-                        newElTd[0].innerHTML = `${key}`
-                        let phrases = ["TEMPO", "FM", "PROB30", "PROB40"];
-                        output = taf_proc(val[1], phrases);
-                        newElTd[1].innerHTML = output.join(" ");
-                        display.appendChild(newElRow)
-                        rowCount++
-                        console.log(rowCount);
-                    }
-                    if (rowCount == 0) {
-                            window.close();
-                        }
-                    //event.source.postMessage(formData, event.origin)
-                } else {
-                    console.log("Not correct")
-                }
-                oldData = JSON.stringify(event.data)
-            }
-        })
-        function taf_proc(val, phrase) {
-            let output = [];
-            let arr = val.split(" ");
-            arr.forEach((element, i, ar ) => {
-                phrase.forEach(el =>{
-                    if (element.includes(el)) {
-                        ar[i] = "<div>" + element;
-                    }
-                })
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TAF Board</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111e;
+        --panel: rgba(10, 20, 39, 0.94);
+        --panel-soft: rgba(255, 255, 255, 0.04);
+        --border: rgba(133, 201, 255, 0.16);
+        --text: #edf6ff;
+        --muted: #97adc3;
+        --accent: #69d2ff;
+        --danger: #ff8f8f;
+      }
 
-            });
-            return arr
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        font-family: "IBM Plex Sans", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(105, 210, 255, 0.12), transparent 28%),
+          linear-gradient(160deg, #091321 0%, #030811 100%);
+      }
+
+      .shell {
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding: 16px;
+      }
+
+      .card {
+        max-width: 980px;
+        margin: 0 auto;
+        border-radius: 24px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        padding: 18px;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+      }
+
+      .eyebrow {
+        margin: 0 0 4px;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        font-size: 0.7rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.5rem;
+      }
+
+      .subtitle,
+      .notice,
+      .empty-state {
+        color: var(--muted);
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+      }
+
+      .notice {
+        min-height: 1.4em;
+        margin: 14px 0;
+      }
+
+      .notice.error {
+        color: var(--danger);
+      }
+
+      .taf-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .taf-block {
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+          var(--panel-soft);
+        padding: 14px;
+      }
+
+      .taf-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 10px;
+      }
+
+      .taf-airport {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.08em;
+      }
+
+      .taf-rank {
+        color: var(--muted);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.6;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.9rem;
+      }
+
+      .empty-state {
+        padding: 24px 0 8px;
+      }
+
+      @media (max-width: 640px) {
+        .shell {
+          padding: 10px;
         }
 
+        .card {
+          padding: 14px;
+          border-radius: 18px;
+        }
+
+        h1 {
+          font-size: 1.2rem;
+        }
+
+        .taf-header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+
+        pre {
+          font-size: 0.82rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <main class="card">
+        <p class="eyebrow">Secondary Forecast View</p>
+        <h1>TAF Board</h1>
+        <p id="subtitle" class="subtitle">Opened from the METAR desk. Newest airport requests stay on top.</p>
+        <p id="notice" class="notice"></p>
+        <section id="empty_state" class="empty-state">Select an airport from the METAR desk to load its forecast here.</section>
+        <section id="taf_container" class="taf-list"></section>
+      </main>
+    </div>
+
+    <script>
+      const subtitle = document.getElementById("subtitle");
+      const notice = document.getElementById("notice");
+      const tafContainer = document.getElementById("taf_container");
+      const emptyState = document.getElementById("empty_state");
+      const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${socketProtocol}//${window.location.host}/ws_aviation`);
+      const tafChannel = new BroadcastChannel("wx-station-taf");
+      const lastTafAirportKey = "wx-station-last-taf-airport";
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      const queryAirport = new URLSearchParams(window.location.search).get("airport") || "";
+      const initialAirportFromPath = pathParts.length > 1 && pathParts[0] === "taf"
+        ? decodeURIComponent(pathParts[pathParts.length - 1] || "").trim().toUpperCase()
+        : "";
+      const initialAirport = queryAirport.trim().toUpperCase() || initialAirportFromPath || localStorage.getItem(lastTafAirportKey) || "";
+      const tafEntries = new Map();
+      let airportOrder = [];
+      let pendingAirports = [];
+
+      const setNotice = (message, isError = false) => {
+        notice.textContent = message || "";
+        notice.classList.toggle("error", isError);
+      };
+
+      const formatTaf = text => {
+        if (!text) {
+          return "No TAF available.";
+        }
+        return text
+          .split(" ")
+          .map(token => ["TEMPO", "FM", "PROB30", "PROB40"].some(prefix => token.startsWith(prefix)) ? `\n${token}` : token)
+          .join(" ")
+          .trim();
+      };
+
+      const moveAirportToTop = airport => {
+        airportOrder = [airport, ...airportOrder.filter(entry => entry !== airport)];
+      };
+
+      const renderTafList = () => {
+        tafContainer.replaceChildren();
+        emptyState.hidden = airportOrder.length > 0;
+
+        airportOrder.forEach((airport, index) => {
+          const entry = tafEntries.get(airport) || { airport, taf: null };
+          const block = document.createElement("section");
+          block.className = "taf-block";
+
+          const header = document.createElement("div");
+          header.className = "taf-header";
+
+          const airportLabel = document.createElement("div");
+          airportLabel.className = "taf-airport";
+          airportLabel.textContent = entry.airport;
+
+          const rankLabel = document.createElement("div");
+          rankLabel.className = "taf-rank";
+          rankLabel.textContent = index === 0 ? "Most Recent" : `Earlier Request ${index}`;
+
+          const body = document.createElement("pre");
+          body.textContent = formatTaf(entry.taf);
+
+          header.appendChild(airportLabel);
+          header.appendChild(rankLabel);
+          block.appendChild(header);
+          block.appendChild(body);
+          tafContainer.appendChild(block);
+        });
+      };
+
+      const requestAirport = airport => {
+        if (!airport) {
+          return;
+        }
+        localStorage.setItem(lastTafAirportKey, airport);
+        moveAirportToTop(airport);
+        renderTafList();
+        subtitle.textContent = `Tracking ${airportOrder.length} forecast${airportOrder.length === 1 ? "" : "s"} from the METAR desk.`;
+
+        if (socket.readyState !== WebSocket.OPEN) {
+          pendingAirports = [airport, ...pendingAirports.filter(entry => entry !== airport)];
+          setNotice("Waiting for aviation socket before loading forecast.", true);
+          return;
+        }
+
+        socket.send(JSON.stringify({ kind: "taf", airport }));
+        setNotice(`Loading forecast for ${airport}.`);
+      };
+
+      const flushPendingAirports = () => {
+        if (socket.readyState !== WebSocket.OPEN || pendingAirports.length === 0) {
+          return;
+        }
+        const queued = [...pendingAirports];
+        pendingAirports = [];
+        queued.forEach(requestAirport);
+      };
+
+      tafChannel.addEventListener("message", event => {
+        const airport = String(event.data?.airport || "").trim().toUpperCase();
+        requestAirport(airport);
+      });
+
+      socket.addEventListener("open", () => {
+        setNotice("");
+        flushPendingAirports();
+        if (initialAirport && airportOrder.length === 0) {
+          requestAirport(initialAirport);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (!notice.textContent) {
+          setNotice("Aviation socket disconnected.", true);
+        }
+      });
+
+      socket.addEventListener("error", () => {
+        setNotice("Aviation socket error.", true);
+      });
+
+      socket.addEventListener("message", event => {
+        let payload = null;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (_error) {
+          setNotice("Received invalid TAF payload.", true);
+          return;
+        }
+
+        if (payload.error) {
+          if (payload.airport) {
+            moveAirportToTop(payload.airport);
+            tafEntries.set(payload.airport, { airport: payload.airport, taf: null });
+            renderTafList();
+          }
+          setNotice(payload.error, true);
+          return;
+        }
+
+        const entry = Array.isArray(payload.entries) ? payload.entries[0] : null;
+        if (!entry || !entry.airport) {
+          return;
+        }
+
+        moveAirportToTop(entry.airport);
+        tafEntries.set(entry.airport, entry);
+        renderTafList();
+        subtitle.textContent = `Tracking ${airportOrder.length} forecast${airportOrder.length === 1 ? "" : "s"} from the METAR desk.`;
+        setNotice(`Loaded forecast for ${entry.airport}.`);
+      });
+
+      if (initialAirport) {
+        requestAirport(initialAirport);
+      }
     </script>
+  </body>
+</html>

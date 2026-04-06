@@ -1,11 +1,8 @@
 use askama::Template;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast::{self,  Sender}};
+use tokio::sync::{Mutex, broadcast::{self, Sender}};
 use std::collections::HashMap;
-use axum::extract::ws::WebSocket;
-use axum::extract::ws::Message;
-use futures_util::stream::SplitSink;
 use crate::{oil::{OilDisplay, OilPrice, Comodities}, stocks::Stock};
 
 
@@ -71,11 +68,62 @@ pub struct WsOutput {
     pub now: String,
     pub data: String,
 }
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatClientMessage {
+    pub kind: String,
+    pub user_id: Option<String>,
+    pub message: Option<String>,
+    pub image_name: Option<String>,
+    pub image_type: Option<String>,
+    pub image_data: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatEvent {
+    pub kind: String,
+    pub user_id: Option<String>,
+    pub message: Option<String>,
+    pub image_name: Option<String>,
+    pub image_type: Option<String>,
+    pub image_data: Option<String>,
+    pub now: String,
+    pub users: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatBootstrap {
+    pub users: Vec<String>,
+    pub history: Vec<ChatEvent>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AviationSocketRequest {
+    pub kind: String,
+    pub airport: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AviationEntry {
+    pub airport: String,
+    pub metar: Option<String>,
+    pub taf: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AviationSocketResponse {
+    pub kind: String,
+    pub airport: Option<String>,
+    pub entries: Vec<AviationEntry>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub sender: Sender<String>,
     pub display: HashMap<String, String>,
     pub users: HashMap<String, String>,
+    pub chat_history: Vec<ChatEvent>,
     pub wx: HashMap<String, String>,
     pub now: String,
     pub metar: HashMap<String, String>,
@@ -83,7 +131,6 @@ pub struct AppState {
     pub zip: String,
     pub ip: String,
     pub sender_ws: Sender<(String,String)>,
-    pub clients: Arc<Mutex<HashMap<String, SplitSink<WebSocket, Message>>>>,
     pub stocks: Arc<Mutex<Vec<Stock>>>,
     pub oil: Arc<Mutex<Vec<OilPrice>>>,
     pub status: String,
@@ -101,6 +148,7 @@ impl AppState {
             sender: tx,
             display: HashMap::new(),
             users: HashMap::new(),
+            chat_history: Vec::new(),
             wx: HashMap::new(),
             now: String::new(),
             metar: HashMap::new(),
@@ -108,11 +156,9 @@ impl AppState {
             zip: String::from("32011"),
             ip: String::new(),
             sender_ws: sender,
-            clients: Arc::new(Mutex::new(HashMap::new())),
             stocks: Arc::new(Mutex::new(Vec::new())),
             oil: Arc::new(Mutex::new(oil_output)),
             status: String::new(),
         }))
     }
 }
-
