@@ -29,11 +29,12 @@
             comment 
             */
 const windowFeatures = "left=100,top=100,width=320,height=320";
+const allowedOrigin = window.location.origin;
 //testWindow = window.open("/popup",windowFeatures)
 let output = document.querySelector("#test")
 window.addEventListener("message", event => {
     console.log(event.data)
-    if (event.origin !== "http://127.0.0.1:8080") {
+    if (event.origin !== allowedOrigin) {
         output.innerHTML = "<h1>Fake Data</h1>"
     }else{
         output.innerHTML = `<h1>${event.data.get("test_in")}</h1>`
@@ -62,8 +63,6 @@ for (let [key, val] of Object.entries(wx_data)){
     
 }
 console.log(Date(wx_data.obsTime))
-//myFrame = document.getElementById("frame")
-//myFrame.contentWindow.postMessage("Fuck Test", "http://127.0.0.1:8080")
 let myForm = document.querySelector("#test_form")
 
 let myBtns = document.querySelectorAll(".button")
@@ -75,7 +74,9 @@ function myFunc(event) {
     switch (event.submitter["id"]) {
         case "my_button_1":
             formData.set("test_in", formData.get("test_in") + " ALot")
-            testWindow.postMessage(formData.get("test_in"), "http://127.0.0.1:8080")
+            if (typeof testWindow !== "undefined" && testWindow) {
+                testWindow.postMessage(formData.get("test_in"), allowedOrigin)
+            }
             break
     }
 for (let [key, val] of formData.entries()){
@@ -87,7 +88,7 @@ for (let [key, val] of formData.entries()){
     myForm.addEventListener("formdata", event =>{
     console.log(event.formData)
     console.log(event.srcElement)
-    event.formData.set("test_in", event.formData.get("test_in") + " Sucks Dick")
+    event.formData.set("test_in", event.formData.get("test_in") + " updated")
     event.formData.set("tune", "Submit")
 }) 
 

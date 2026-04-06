@@ -15,7 +15,6 @@ use futures_util::{SinkExt, StreamExt, stream::Stream};
 use serde::{Deserialize};
 use serde_json;
 use std::collections::HashMap;
-use std::env;
 use std::future::Future;
 use std::fs;
 use std::path;
@@ -45,9 +44,8 @@ async fn main() -> Result<()> {
     // build our application with a route
     let app = Router::new()
         .route("/sse", get(sse_handler))
-        .route("/", get(default_get))
+        .route("/", get(default_get).post(default_post))
         .nest_service("/static", ServeDir::new("static"))
-        .route("/", post(default_post))
         .route("/metar", get(metar_get).post(metar_post))
         .route("/stock", post(stock_post))
         .route("/taf", get(taf_root_get))
@@ -845,7 +843,9 @@ async fn chat_post(State(app_state): State<Arc<Mutex<AppState>>>, form: Multipar
         println!("{} : {}", key, val);
     }
     if form_data.contains_key("add_user") && form_data.contains_key("user_id") {
-        let user_id = form_data.get("user_id").unwrap().clone();
+        let Some(user_id) = form_data.get("user_id").cloned() else {
+            return Html::from("ERROR".to_string());
+        };
         let mut state = app_state.lock().await;
         state.display.insert("data".to_string(), "".to_string());
         state.users.insert(user_id.clone(), "None".to_string());
@@ -907,9 +907,15 @@ async fn input_post(State(app_state): State<Arc<Mutex<AppState>>>, form_data: Mu
     };
     if form_data.contains_key("user_id") && form_data.contains_key("value") {
         let msg_id = uuid::Uuid::new_v4().to_string();
+        let Some(user_id) = form_data.get("user_id").cloned() else {
+            return Redirect::to("/input");
+        };
+        let Some(value) = form_data.get("value").cloned() else {
+            return Redirect::to("/input");
+        };
         let output = HashMap::from([
-        ("user".to_string(), form_data.get("user_id").unwrap().clone()),
-        ("data".to_string(), form_data.get("value").unwrap().clone()),
+        ("user".to_string(), user_id),
+        ("data".to_string(), value),
         ("message_id".to_string(), msg_id)
         ]);
         println!("{:?}", &output);

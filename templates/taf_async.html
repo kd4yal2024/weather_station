@@ -23,7 +23,7 @@
         </table>
     </body>
     <script>
-const ipAddr = "http://127.0.0.1:8080"
+const ipAddr = window.location.origin
 let oldData;display = document.getElementById("display") //main table
 window.addEventListener("message", event => {
     if (event.origin !== ipAddr) {

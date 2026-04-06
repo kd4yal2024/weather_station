@@ -18,12 +18,13 @@
         <button id="test_sub", name="mybtn", value="submit">Submit</button>
     </body>
     <script>
-        myBtn = document.getElementById("test_sub")
-        display = document.getElementById("display")
-        newEl = document.createElement("li")
+        const allowedOrigin = window.location.origin
+        const myBtn = document.getElementById("test_sub")
+        const display = document.getElementById("display")
+        const newEl = document.createElement("li")
         display.appendChild(newEl)
         window.addEventListener("message", event => {
-            if (event.origin == "http://127.0.0.1:8080") {
+            if (event.origin == allowedOrigin) {
                 console.log(event.source)
                 newEl.innerText = event.data
                 console.log(event.data)

@@ -50,8 +50,9 @@
     </body>
     <script>
 //sets attributes of the Chat button.
-const ipAddr = "http://127.0.0.1:8080"
-const sock_ip = "ws://127.0.0.1:7890"
+const ipAddr = window.location.origin
+const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+const sock_ip = `${socketProtocol}//${window.location.hostname}:7890`
 let sessionID = ""
 const socket = new WebSocket(sock_ip)
 const btn_attr = {"class": "button", "type": "submit", "name": "submit", "value": "chat", }

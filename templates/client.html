@@ -17,7 +17,8 @@
     <script>
         let sessionID = ""
         let output = {};
-        const socket = new WebSocket('ws://127.0.0.1:7890')
+        const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+        const socket = new WebSocket(`${socketProtocol}//${window.location.hostname}:7890`)
         const form = document.getElementById("form")
         form.addEventListener("submit", event=>{
             event.preventDefault();
