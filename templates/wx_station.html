@@ -193,6 +193,7 @@ if (zip != "None")  {
 let tempVal = null;
 let dewVal = null;
 let rhVal = null;
+let tempUnit = localStorage.getItem("wx-station-temp-unit") === "C" ? "C" : "F";
 const status_bar = document.getElementById("status");
 const themeToggle = document.getElementById("theme_toggle");
 const wxDetailsLabel = document.getElementById("wx_details_label");
@@ -244,13 +245,23 @@ const renderGauges = () => {
   if (tempVal == null || dewVal == null || rhVal == null) {
     return;
   }
-  temp.style.setProperty("--value", tempVal / 120);
-  temp.innerHTML = Math.round(tempVal) + "&#176";
-  dew.style.setProperty("--value", dewVal / 120);
-  dew.innerHTML = Math.round(dewVal) + "&#176";
+  const shownTemp = tempUnit === "C" ? ((tempVal - 32) / 1.8) : tempVal;
+  const shownDew = tempUnit === "C" ? ((dewVal - 32) / 1.8) : dewVal;
+  const gaugeMax = tempUnit === "C" ? 50 : 120;
+  temp.style.setProperty("--value", Math.max(0, shownTemp) / gaugeMax);
+  temp.innerHTML = `${Math.round(shownTemp)}&#176${tempUnit}`;
+  dew.style.setProperty("--value", Math.max(0, shownDew) / gaugeMax);
+  dew.innerHTML = `${Math.round(shownDew)}&#176${tempUnit}`;
   rh.style.setProperty("--value", rhVal / 100);
   rh.innerHTML = Math.round(rhVal) + "%";
 };
+temp.style.cursor = "pointer";
+temp.title = "Click to switch between Fahrenheit and Celsius";
+temp.addEventListener("click", () => {
+  tempUnit = tempUnit === "F" ? "C" : "F";
+  localStorage.setItem("wx-station-temp-unit", tempUnit);
+  renderGauges();
+});
 const toTitleCase = text => {
   if (!text) {
     return "";
