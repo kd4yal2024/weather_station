@@ -36,6 +36,7 @@ pub struct SseData {
     pub display: HashMap<String, String>,
     pub users: HashMap<String, String>,
     pub wx: HashMap<String, String>,
+    pub zip: String,
     pub now: String,
     pub metar: HashMap<String, Vec<String>>,
     pub stocks: Vec<Stock>,
@@ -49,6 +50,7 @@ impl SseData {
             display: HashMap::from([("data".to_string(),"".to_string())]),
             users: HashMap::new(),
             wx: HashMap::new(),
+            zip: String::new(),
             now: String::new(),
             metar: {
                 let mut output = HashMap::new();
@@ -153,7 +155,7 @@ impl AppState {
             now: String::new(),
             metar: HashMap::new(),
             taf: HashMap::new(),
-            zip: String::from("32011"),
+            zip: String::new(),
             ip: String::new(),
             sender_ws: sender,
             stocks: Arc::new(Mutex::new(Vec::new())),

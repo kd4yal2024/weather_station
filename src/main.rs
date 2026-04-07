@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::response::{Html, IntoResponse, Redirect};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::response::sse::KeepAlive;
 use axum::{
     Router,
@@ -10,14 +10,16 @@ use axum::{
     routing::{get, post},
 };
 use async_stream::stream;
-use axum_extra::TypedHeader;
 use futures_util::{SinkExt, StreamExt, stream::Stream};
 use serde::{Deserialize};
 use serde_json;
 use std::collections::HashMap;
+use std::env;
 use std::future::Future;
 use std::fs;
-use std::path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{self, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{convert::Infallible, time::Duration};
@@ -39,13 +41,21 @@ use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let app_state = AppState::new();
+    if let Some(saved_zip) = load_saved_zip() {
+        let mut state = app_state.lock().await;
+        state.zip = saved_zip.clone();
+        state.status = format!("Loaded saved ZIP {}", saved_zip);
+    }
     tokio::spawn(aquire_data(app_state.clone()));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let bind_addr = env::var("WX_STATION_BIND").unwrap_or_else(|_| "127.0.0.1:18081".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    println!("Weather Station listening on http://{}", bind_addr);
     // build our application with a route
     let app = Router::new()
         .route("/sse", get(sse_handler))
+        .route("/api/state", get(state_handler))
         .route("/", get(default_get).post(default_post))
-        .nest_service("/static", ServeDir::new("static"))
+        .nest_service("/static", ServeDir::new(static_dir()))
         .route("/metar", get(metar_get).post(metar_post))
         .route("/stock", post(stock_post))
         .route("/taf", get(taf_root_get))
@@ -69,19 +79,84 @@ async fn main() -> Result<()> {
 /// Streams the latest dashboard snapshot to browser clients over Server-Sent
 /// Events so the main weather page can stay live without polling.
 async fn sse_handler(
-    TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
     State(app_state): State<Arc<Mutex<AppState>>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    println!("{:?}", user_agent);
-    let state_lck = app_state.lock().await;
-    let mut rx = state_lck.sender.clone().subscribe();
+    println!("SSE client connected");
+    let (initial_payload, mut rx) = {
+        let state_lck = app_state.lock().await;
+        let mut snapshot = SseData::new();
+        snapshot.display = state_lck.display.clone();
+        snapshot.users = state_lck.users.clone();
+        snapshot.wx = state_lck.wx.clone();
+        snapshot.zip = state_lck.zip.clone();
+        snapshot.now = state_lck.now.clone();
+        snapshot.status = state_lck.status.clone();
+        for (key, value) in state_lck.metar.iter() {
+            snapshot.metar.insert(key.to_uppercase(), vec![value.clone()]);
+        }
+        for (key, value) in state_lck.taf.iter() {
+            if let Some(values) = snapshot.metar.get_mut(key) {
+                values.push(value.clone());
+            }
+        }
+        let stocks = state_lck.stocks.clone();
+        let oil = state_lck.oil.clone();
+        drop(state_lck);
+        snapshot.stocks = stocks.lock().await.clone();
+        let oil_guard = oil.lock().await;
+        if !oil_guard.is_empty() {
+            snapshot.oil1 = oil_guard[0].display();
+        }
+        if oil_guard.len() > 1 {
+            snapshot.oil2 = oil_guard[1].display();
+        }
+        let payload = serde_json::to_string(&snapshot).unwrap_or_else(|_| "JSON ERROR".to_string());
+        let rx = app_state.lock().await.sender.clone().subscribe();
+        (payload, rx)
+    };
     Sse::new(stream! {
+        yield Ok(Event::default().data::<String>(initial_payload));
         while let Ok(msg) = rx.recv().await {
             yield Ok(Event::default().data::<String>(msg));
         }
 
 
     }).keep_alive(KeepAlive::default())
+}
+
+/// Returns the current dashboard snapshot as JSON for browsers that need a
+/// simpler fallback than SSE.
+async fn state_handler(
+    State(app_state): State<Arc<Mutex<AppState>>>,
+) -> Json<SseData> {
+    let state_lck = app_state.lock().await;
+    let mut snapshot = SseData::new();
+    snapshot.display = state_lck.display.clone();
+    snapshot.users = state_lck.users.clone();
+    snapshot.wx = state_lck.wx.clone();
+    snapshot.zip = state_lck.zip.clone();
+    snapshot.now = state_lck.now.clone();
+    snapshot.status = state_lck.status.clone();
+    for (key, value) in state_lck.metar.iter() {
+        snapshot.metar.insert(key.to_uppercase(), vec![value.clone()]);
+    }
+    for (key, value) in state_lck.taf.iter() {
+        if let Some(values) = snapshot.metar.get_mut(key) {
+            values.push(value.clone());
+        }
+    }
+    let stocks = state_lck.stocks.clone();
+    let oil = state_lck.oil.clone();
+    drop(state_lck);
+    snapshot.stocks = stocks.lock().await.clone();
+    let oil_guard = oil.lock().await;
+    if !oil_guard.is_empty() {
+        snapshot.oil1 = oil_guard[0].display();
+    }
+    if oil_guard.len() > 1 {
+        snapshot.oil2 = oil_guard[1].display();
+    }
+    Json(snapshot)
 }
 /// Upgrades a client connection into the shared broadcast WebSocket channel.
 async fn ws_handler(State(state):State<Arc<Mutex<AppState>>>, ws:WebSocketUpgrade) -> impl IntoResponse {
@@ -500,31 +575,46 @@ async fn default_get(State(app_state): State<Arc<Mutex<AppState>>>,) -> impl Int
 async fn default_post(
     State(app_state): State<Arc<Mutex<AppState>>>,
     form: Multipart,
-) -> StatusCode {
+) -> Response {
     println!("Form handler");
     let form_data = match process_form(form).await {
         Ok(data) => data,
         Err(e) => {
             println!("Failed to parse zip form: {}", e);
-            return StatusCode::BAD_REQUEST;
+            return StatusCode::BAD_REQUEST.into_response();
         }
     };
+    let mut should_refresh = false;
     if let Some(zip) = form_data.get("zip") {
+        let zip = zip.trim().to_string();
         let mut state_lck = app_state.lock().await;
-        if zip.len() == 5 {
+        if zip.len() == 5 && zip.chars().all(|c| c.is_ascii_digit()) {
             println!("New ZIP was parsed");
+            log_weather(format!("ZIP updated to {}", zip));
             state_lck.zip = zip.clone();
+            state_lck.status = format!("ZIP updated to {}", zip);
+            should_refresh = true;
+            if let Err(e) = save_zip(&zip) {
+                println!("Failed to persist ZIP {}: {}", zip, e);
+                log_weather(format!("Failed to persist ZIP {}: {}", zip, e));
+            }
         } else {
+            log_weather(format!("Rejected invalid ZIP input: {}", zip));
             state_lck.status = "Invalid ZIP Code ! ! !".to_string();
         }
+    } else {
+        let mut state_lck = app_state.lock().await;
+        state_lck.status = "ZIP Code is required".to_string();
     }
-    get_wx(app_state.clone()).await;
-    StatusCode::OK
+    if should_refresh {
+        get_wx(app_state.clone()).await;
+    }
+    Redirect::to("/").into_response()
 }
 
 /// Runs the background scheduler that refreshes weather, stocks, oil prices,
 /// and public IP state before publishing a combined SSE payload.
-async fn aquire_data(state: Arc<Mutex<AppState>>) -> Result<()> {
+async fn aquire_data(state: Arc<Mutex<AppState>>) {
     let mut interval = interval(Duration::from_secs(1));
     let mut sse_output = SseData::new();
     let mut now = Instant::now() - Duration::from_secs(60);
@@ -544,24 +634,38 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) -> Result<()> {
         if now.elapsed() >= Duration::from_secs(60) {
             get_wx(state.clone()).await;
             now = Instant::now();
-            ip = update_ip(&old_ip).await?;
-            old_ip = ip.clone();
+            match update_ip(&old_ip).await {
+                Ok(new_ip) => {
+                    ip = new_ip;
+                    old_ip = ip.clone();
+                }
+                Err(e) => {
+                    println!("IP update failed: {}", e);
+                    log_weather(format!("IP update failed: {}", e));
+                }
+            }
             println!("Attempted getting Wx");
         }
         if now2.elapsed() >= Duration::from_hours(1) {
             let mut oil_lck = oil_arc.lock().await;
             for x in oil_lck.iter_mut() {
-                x.update().await?;
+                if let Err(e) = x.update().await {
+                    println!("Oil update failed: {}", e);
+                    log_weather(format!("Oil update failed: {}", e));
+                }
             }
             now2 = Instant::now();
             println!("Attempted to update oil price!");
         }
         if now3.elapsed() >= Duration::from_mins(5) {
-            updater(stocks_arc.clone()).await?;
+            if let Err(e) = updater(stocks_arc.clone()).await {
+                println!("Stock update failed: {}", e);
+                log_weather(format!("Stock update failed: {}", e));
+            }
             now3 = Instant::now();
             println!("Attempted to update stocks");
         }
-        let (sender, display, users, wx, metar, taf, status) = {
+        let (sender, display, users, wx, metar, taf, status, zip) = {
             let mut state_lck = state.lock().await;
             state_lck.ip = ip.clone();
             state_lck.wx.entry("now".to_string()).insert_entry(Local::now().format("%A, %B %-d, %Y at %-H:%M:%S").to_string());
@@ -574,6 +678,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) -> Result<()> {
                 state_lck.metar.clone(),
                 state_lck.taf.clone(),
                 state_lck.status.clone(),
+                state_lck.zip.clone(),
             )
         };
         sse_output.now = Local::now().format("%B %-d, %Y - %-H:%M:%S").to_string();
@@ -589,6 +694,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) -> Result<()> {
         }
         sse_output.users = users;
         sse_output.display = display;
+        sse_output.zip = zip;
         sse_output.stocks = stocks_arc.lock().await.clone();
         let oil_guard = oil_arc.lock().await;
         if oil_guard.len() > 0 {
@@ -615,6 +721,14 @@ struct OpenWeatherResponse {
     visibility: Option<f64>,
     name: String,
     dt: i64,
+}
+
+/// Error payload returned by OpenWeather when a ZIP is invalid or the API key
+/// is rejected.
+#[derive(Deserialize)]
+struct OpenWeatherErrorResponse {
+    _cod: serde_json::Value,
+    message: Option<String>,
 }
 
 /// Weather condition summary entries returned by OpenWeather.
@@ -667,23 +781,58 @@ async fn get_wx(app_state: Arc<Mutex<AppState>>) {
         let state = app_state.lock().await;
         state.zip.clone()
     };
+    if zip.trim().is_empty() {
+        log_weather("Skipping weather refresh because ZIP is blank");
+        app_state.lock().await.status = "Enter a ZIP Code to start weather updates".to_string();
+        return;
+    }
+    log_weather(format!("Starting weather refresh for ZIP {}", zip));
     let key = "373ee2691da6e29a8a5a3315557f8fff".to_string();
     if key.is_empty() {
         println!("OPENWEATHER_API_KEY is not set, skipping weather update");
+        log_weather("OpenWeather API key is empty; skipping refresh");
         return;
     }
-    let addr = format!("http://api.openweathermap.org/data/2.5/weather?zip={zip},us&appid={key}");
+    let addr = format!("https://api.openweathermap.org/data/2.5/weather?zip={zip},us&units=imperial&appid={key}");
     let client = reqwest::Client::new();
-    let wx_data = match client.get(addr).send().await {
-        Ok(resp) => match resp.json::<OpenWeatherResponse>().await {
-            Ok(data) => data,
-            Err(e) => {
-                println!("Failed to parse OpenWeather response: {}", e);
+    let wx_data = match client.get(addr).timeout(Duration::from_secs(10)).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = match resp.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    println!("Failed to read OpenWeather response body: {}", e);
+                    log_weather(format!("OpenWeather body read failed for ZIP {}: {}", zip, e));
+                    app_state.lock().await.status = format!("Weather response read failed for ZIP {}", zip);
+                    return;
+                }
+            };
+            if !status.is_success() {
+                let api_error = serde_json::from_str::<OpenWeatherErrorResponse>(&body).ok();
+                let message = api_error
+                    .and_then(|err| err.message)
+                    .unwrap_or_else(|| body.clone());
+                println!("OpenWeather returned {} for ZIP {}: {}", status, zip, message);
+                log_weather(format!("OpenWeather returned {} for ZIP {}: {}", status, zip, message));
+                app_state.lock().await.status = format!("Weather API error for {}: {}", zip, message);
                 return;
+            }
+            match serde_json::from_str::<OpenWeatherResponse>(&body) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("Failed to parse OpenWeather response: {}", e);
+                    println!("OpenWeather body: {}", body);
+                    log_weather(format!("OpenWeather parse failed for ZIP {}: {}", zip, e));
+                    log_weather(format!("OpenWeather body for ZIP {}: {}", zip, body));
+                    app_state.lock().await.status = format!("Weather parse failed for ZIP {}", zip);
+                    return;
+                }
             }
         },
         Err(e) => {
             println!("Failed to fetch weather data: {}", e);
+            log_weather(format!("OpenWeather fetch failed for ZIP {}: {}", zip, e));
+            app_state.lock().await.status = format!("Weather fetch failed for ZIP {}", zip);
             return;
         }
     };
@@ -692,7 +841,7 @@ async fn get_wx(app_state: Arc<Mutex<AppState>>) {
     let sun_set = Local.timestamp_opt(wx_data.sys.sunset, 0).single().unwrap_or_else(|| Local::now());
     let main = wx_data.weather.get(0).map(|w| w.main.clone()).unwrap_or_default();
     let desc = wx_data.weather.get(0).map(|w| w.description.clone()).unwrap_or_default();
-    let temp_f = (wx_data.main.temp * 1.8) - 459.67;
+    let temp_f = wx_data.main.temp;
     let temp_c = (temp_f - 32.0) / 1.8;
     let press = wx_data.main.pressure.map(|p| p.to_string()).unwrap_or_default();
     let humid = wx_data.main.humidity.unwrap_or_default();
@@ -728,7 +877,7 @@ async fn get_wx(app_state: Arc<Mutex<AppState>>) {
     let mut state_lck = app_state.lock().await;
     state_lck.wx.insert("wx".to_string(), main.clone());
     state_lck.wx.insert("desc".to_string(), desc.clone());
-    state_lck.wx.insert("temp".to_string(), temp_c.to_string());
+    state_lck.wx.insert("temp".to_string(), temp_f.to_string());
     state_lck.wx.insert("dew_piont_c".to_string(), dew_point_c.to_string());
     state_lck.wx.insert("dew_point_f".to_string(), dew_point_f.to_string());
     state_lck.wx.insert("press".to_string(), press.clone());
@@ -746,6 +895,11 @@ async fn get_wx(app_state: Arc<Mutex<AppState>>) {
     state_lck.wx.insert("lon".to_string(), lon.clone());
     state_lck.wx.insert("city".to_string(), name.clone());
     state_lck.wx.insert("t_o_d".to_string(), t_o_d.clone());
+    state_lck.status = format!("Weather updated for {} ({})", name, zip);
+    log_weather(format!(
+        "Weather updated successfully for ZIP {}: city={}, temp_f={}, condition={}",
+        zip, name, temp_f, desc
+    ));
     println!("Updated weather for {}", name);
 }
 
@@ -1046,8 +1200,91 @@ async fn process_form(mut form: Multipart) -> Result<HashMap<String, String>> {
 
 /// Reads a template or static HTML file from disk into memory.
 fn read_html_file(path: &path::Path) -> Result<String> {
-    let output = fs::read_to_string(path)?;
+    let resolved = resolve_app_path(path);
+    let output = fs::read_to_string(resolved)?;
     Ok(output)
+}
+
+/// Appends a timestamped weather diagnostic line to the runtime log file.
+fn log_weather(message: impl AsRef<str>) {
+    let line = format!(
+        "[{}] {}\n",
+        Local::now().format("%Y-%m-%d %H:%M:%S"),
+        message.as_ref()
+    );
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file_path())
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Resolves repository-relative assets from either an explicit runtime root or
+/// the executable layout so launching from Explorer or PowerShell still finds
+/// templates and static files on Windows.
+fn resolve_app_path(path: &path::Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    app_root().join(path)
+}
+
+/// Returns the directory that contains templates and static assets.
+fn app_root() -> PathBuf {
+    if let Ok(root) = env::var("WX_STATION_ROOT") {
+        return PathBuf::from(root);
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let name = parent.file_name().and_then(|v| v.to_str()).unwrap_or_default();
+            if name.eq_ignore_ascii_case("debug") || name.eq_ignore_ascii_case("release") {
+                if let Some(root) = parent.parent().and_then(|dir| dir.parent()) {
+                    return root.to_path_buf();
+                }
+            }
+            return parent.to_path_buf();
+        }
+    }
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Returns the static asset directory used by Axum so Chrome can load styles,
+/// scripts, images, and audio reliably on Windows 11.
+fn static_dir() -> PathBuf {
+    resolve_app_path(path::Path::new("static"))
+}
+
+/// Returns the path of the application log file.
+fn log_file_path() -> PathBuf {
+    if let Ok(path) = env::var("WX_STATION_LOG") {
+        return PathBuf::from(path);
+    }
+    app_root().join("wx_station.log")
+}
+
+/// Returns the path used to persist the selected ZIP between restarts.
+fn zip_file_path() -> PathBuf {
+    app_root().join("wx_station_zip.txt")
+}
+
+/// Loads the previously selected ZIP from disk if available.
+fn load_saved_zip() -> Option<String> {
+    let path = zip_file_path();
+    let contents = fs::read_to_string(path).ok()?;
+    let zip = contents.trim().to_string();
+    if zip.len() == 5 && zip.chars().all(|c| c.is_ascii_digit()) {
+        Some(zip)
+    } else {
+        None
+    }
+}
+
+/// Persists the currently selected ZIP so reconnects and restarts keep it.
+fn save_zip(zip: &str) -> Result<()> {
+    fs::write(zip_file_path(), format!("{}\n", zip))?;
+    Ok(())
 }
 
 /// Looks up the current public IP address and sends an email notification if it

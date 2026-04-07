@@ -177,13 +177,12 @@ metarBtn.addEventListener("click", event =>{
   window.open("/metar", "METAR", "width=760,height=680,resizable=yes,scrollbars=yes");
 });
 let getWx = document.getElementById("getWx");
-getWx.addEventListener("submit", event => {
-  event.preventDefault();
-  let formData = new FormData(event.target);
-  fetch("/", {
-    method: "POST",
-    body: formData,
-  });
+const zipInput = document.getElementById("zip");
+getWx.addEventListener("submit", () => {
+  const submittedZip = zipInput.value.trim();
+  if (submittedZip.length === 5) {
+    status_bar.innerText = `Requesting weather for ${submittedZip}...`;
+  }
 });
 let zip = "{{ zip }}";
 let button = document.querySelector("#getWx button");
@@ -264,22 +263,29 @@ const toTitleCase = text => {
 };
 sse_stream.onopen = () => {
   setStreamStatus(true);
+  console.log("SSE connected");
 };
 sse_stream.onerror = () => {
   setStreamStatus(false);
+  console.error("SSE error");
+  status_bar.innerText = "Live update stream disconnected";
 };
 setTimeout(() =>{
   sse_stream.onmessage = (event) => {
+    try {
     if (event.data == "close") {
       sse_stream.close();
       setStreamStatus(false);
     } else {
       main_data = JSON.parse(event.data);
-      let metar_data = main_data.metar;
-      let stocks = main_data.stocks;
-      let oil1 = main_data.oil1;
-      let oil2 = main_data.oil2;
-      main_data = main_data.wx;
+      const payload = main_data;
+      let stocks = Array.isArray(payload.stocks) ? [...payload.stocks] : [];
+      let oil1 = payload.oil1 || {};
+      let oil2 = payload.oil2 || {};
+      const liveZip = payload.zip || zip;
+      zip = liveZip;
+      zipInput.value = liveZip;
+      main_data = payload.wx || {};
       stockItemsContainer.replaceChildren();
       let wti_price = {"symbol": "WTI", "price": oil1.price, "change": oil1.change_ammount,
        "perc_chng": oil1.change_percent, "time": oil1.updated_at, "display": null};
@@ -317,14 +323,14 @@ setTimeout(() =>{
         stockItemsContainer.appendChild(field);
       });
 
-      status_bar.innerText = main_data.status;
+      status_bar.innerText = payload.status || "";
       wxDetailsLabel.innerText = main_data.desc ? toTitleCase(main_data.desc) : "No Data Yet";
-      locationLabel.innerText = main_data.city ? `${main_data.city} (${zip !== "None" ? zip : "Live"})` : `Zip: ${zip !== "None" ? zip : "Not set"}`;
+      locationLabel.innerText = main_data.city ? `${main_data.city} (${liveZip !== "None" ? liveZip : "Live"})` : `Zip: ${liveZip !== "None" ? liveZip : "Not set"}`;
       timeLabel.innerText = main_data.now ? main_data.now : "Waiting for update";
       setStreamStatus(true);
-      tempVal = (main_data.temp * 1.8) + 32;
-      dewVal = main_data.dew_point_f;
-      rhVal = main_data.humid != null ? main_data.humid : 0;
+      tempVal = Number(main_data.temp ?? 0);
+      dewVal = Number(main_data.dew_point_f ?? 0);
+      rhVal = main_data.humid != null ? Number(main_data.humid) : 0;
       renderGauges();
       if (rhVal < 30) {
         rh.style.setProperty("--color", "#d9b26a");
@@ -333,28 +339,23 @@ setTimeout(() =>{
       } else {
         rh.style.setProperty("--color", "#53d6c7");
       }
-      windDir.innerText = main_data.compass? main_data.compass : "";
-      windArrow.setAttribute("class", `arrow ${main_data.compass? main_data.compass.toLowerCase() : '' }`);
-      windSpeed.innerText = main_data.wind_speed > 0? main_data.wind_speed + " Mph" : 'Calm';
-      if (main_data.gust > 10){
-        windGust.innerText = main_data.gust? "G: "  + main_data.gust + " Mph" : "";
+      windDir.innerText = main_data.compass ? main_data.compass : "";
+      windArrow.setAttribute("class", `arrow ${main_data.compass ? main_data.compass.toLowerCase() : '' }`);
+      windSpeed.innerText = Number(main_data.wind_speed ?? 0) > 0 ? `${main_data.wind_speed} Mph` : 'Calm';
+      if (Number(main_data.gust ?? 0) > 10){
+        windGust.innerText = main_data.gust ? `G: ${main_data.gust} Mph` : "";
       } else {
         windGust.innerText = "";
       }
       windDir.appendChild(windSpeed);
       windDir.appendChild(windGust);
-      let pressVal = main_data.press / 33.8639;
-      baro.innerText = `Baro: ${pressVal.toFixed(2)} inHg`;
+      let pressVal = Number(main_data.press ?? 0) / 33.8639;
+      baro.innerText = pressVal > 0 ? `Baro: ${pressVal.toFixed(2)} inHg` : "Baro: --";
       pressure.appendChild(baro);
-      let tempDescData = [];
-      let descDataIn = main_data.desc.split(" ");
-      descDataIn.forEach(item =>{
-        tempDescData.push(item[0].toUpperCase() + item.slice(1,item.length));
-      });
       wxImg.appendChild(image);
-      ceilingData.innerHTML = `Cloud Cover: ${main_data.ceiling}%`;
+      ceilingData.innerHTML = `Cloud Cover: ${main_data.ceiling ?? 0}%`;
       ceiling.appendChild(ceilingData);
-      riseSetData.innerText = `Sunrise: ${main_data.sunrise} Am - Sunset: ${main_data.sunset} Pm`;
+      riseSetData.innerText = `Sunrise: ${main_data.sunrise ?? "--"} - Sunset: ${main_data.sunset ?? "--"}`;
       riseSet.appendChild(riseSetData);
       switch (main_data.wx){
         case "Smoke":
@@ -403,10 +404,35 @@ setTimeout(() =>{
         case "Snow":
           image.src = "/static/snow.png";
           break;
+        default:
+          image.src = "/static/cloudy.png";
+          break;
       }
+      console.log("Applied SSE payload", payload);
+    }
+    } catch (err) {
+      console.error("Failed to apply SSE payload", err, event.data);
+      status_bar.innerText = `UI update failed: ${err}`;
+      setStreamStatus(false);
     }
   }
 }, 500);
+const pollState = async () => {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (typeof sse_stream.onmessage === "function") {
+      sse_stream.onmessage({ data: JSON.stringify(payload) });
+    }
+  } catch (err) {
+    console.error("State polling failed", err);
+  }
+};
+setInterval(pollState, 3000);
+setTimeout(pollState, 1000);
   </script>
 </body>
 </html>
