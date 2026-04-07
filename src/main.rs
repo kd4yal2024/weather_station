@@ -852,8 +852,8 @@ async fn get_wx(app_state: Arc<Mutex<AppState>>) {
         b * gamma / (a - gamma)
     };
     let dew_point_f = dew_point_c * 1.8 + 32.0;
-    let wind_speed = (wx_data.wind.speed.unwrap_or(0.0) * 2.23694).round();
-    let gust = (wx_data.wind.gust.unwrap_or(0.0) * 2.23694).round();
+    let wind_speed = wx_data.wind.speed.unwrap_or(0.0).round();
+    let gust = wx_data.wind.gust.unwrap_or(0.0).round();
     let wind_deg = wx_data.wind.deg.unwrap_or_default().to_string();
     let clouds = wx_data.clouds.all.unwrap_or_default().to_string();
     let t_o_d = if now > sun_rise && now < sun_set {
